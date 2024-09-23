@@ -1,46 +1,71 @@
-from fastapi import FastAPI, Request, HTTPException
+import json
+from fastapi import FastAPI, Request, Response
 import httpx
-from pydantic import BaseModel
-from typing import Optional, Dict
+import logging
+import os
 
 app = FastAPI()
 
-# 定义请求体模型
-class ProxyRequest(BaseModel):
-    url: str
-    method: str = "POST"  # 默认使用POST方法
-    headers: Optional[Dict[str, str]] = {"Content-Type": "application/json"}  # 默认Content-Type为application/json
-    body: Optional[dict] = None  # GET请求时，body可以为空
+# 配置日志
+logging.basicConfig(level=logging.INFO)
 
-# 定义跳板API，转发请求到外部API
-@app.post("/proxy")
-async def forward_to_api(proxy_request: ProxyRequest):
-    url = proxy_request.url
-    method = proxy_request.method.upper()
-    headers = proxy_request.headers
-    body = proxy_request.body
+# 加载服务配置
+def load_service_config():
+    service_config_str = os.getenv('SERVICE_CONFIG')
+    if not service_config_str:
+        logging.error("环境变量 'SERVICE_CONFIG' 未设置。")
+        return {}
+    try:
+        services = json.loads(service_config_str)
+        logging.info("服务配置从环境变量加载成功。")
+        return services
+    except json.JSONDecodeError as e:
+        logging.error(f"解析服务配置时出错: {e}")
+        return {}
+
+SERVICE_CONFIG = load_service_config()
+
+@app.api_route("/{service}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
+async def proxy(request: Request, service: str, path: str):
+    target_base_url = SERVICE_CONFIG.get(service)
+    if not target_base_url:
+        return Response(content=f"未找到服务 '{service}'。", status_code=404)
+
+    # 构建目标 URL
+    target_url = f"{target_base_url.rstrip('/')}/{path}"
+
+    # 获取请求参数和头信息
+    query_params = dict(request.query_params)
+    headers = dict(request.headers)
+    body = await request.body()
+    headers.pop("host", None)
+
+    headers.setdefault('User-Agent', 'Mozilla/5.0 (compatible; MyProxy/1.0)')
+
+    logging.info(f"服务 '{service}' 的目标基准 URL: {target_base_url}")
+    logging.info(f"完整的目标 URL: {target_url}")
+    logging.info(f"正在转发 {request.method} 请求到 {target_url}")
 
     try:
-        async with httpx.AsyncClient() as client:
-            if method == "POST":
-                # 转发 POST 请求
-                response = await client.post(url, headers=headers, json=body)
-            elif method == "GET":
-                # 转发 GET 请求
-                response = await client.get(url, headers=headers, params=body)
-            elif method == "PUT":
-                # 转发 PUT 请求
-                response = await client.put(url, headers=headers, json=body)
-            elif method == "DELETE":
-                # 转发 DELETE 请求
-                response = await client.delete(url, headers=headers, json=body)
-            else:
-                raise HTTPException(status_code=405, detail="Unsupported HTTP method")
-            
-            response.raise_for_status()
+        async with httpx.AsyncClient(verify=False) as client:
+            resp = await client.request(
+                method=request.method,
+                url=target_url,
+                headers=headers,
+                params=query_params,
+                content=body,
+                timeout=10.0
+            )
+    except httpx.RequestError as exc:
+        logging.error(f"发生错误: {exc}")
+        return Response(content=f"请求 {exc.request.url!r} 时发生错误。", status_code=502)
 
-            # 将外部API的响应直接返回给客户端
-            return response.json()
+    excluded_headers = ['content-encoding', 'transfer-encoding', 'connection', 'keep-alive']
+    response_headers = {key: value for key, value in resp.headers.items() if key.lower() not in excluded_headers}
 
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=e.response.status_code, detail=f"External API error: {e.response.text}") from e
+    return Response(
+        content=resp.content,
+        status_code=resp.status_code,
+        headers=response_headers,
+        media_type=resp.headers.get("content-type")
+    )

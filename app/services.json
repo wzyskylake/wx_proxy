@@ -1,0 +1,7 @@
+{
+    "baidu": "https://baidu.com",
+    "service1": "http://192.168.1.100:8001",
+    "service2": "http://192.168.1.101:8002",
+    "service3": "https://api.example.com"
+  }
+  
