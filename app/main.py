@@ -1,5 +1,5 @@
 import json
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response, Header
 import httpx
 import logging
 import os
@@ -24,6 +24,11 @@ def load_service_config():
         return {}
 
 SERVICE_CONFIG = load_service_config()
+
+@app.get("/get_openid/")
+async def get_openid(openid: str = Header(...)):
+    # 返回接收到的 openid
+    return {"openid": openid}
 
 @app.api_route("/{service}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 async def proxy(request: Request, service: str, path: str):
