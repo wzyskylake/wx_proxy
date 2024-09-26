@@ -26,9 +26,9 @@ def load_service_config():
 SERVICE_CONFIG = load_service_config()
 
 @app.get("/get_openid/")
-async def get_openid(openid: str = Header(...)):
+async def get_openid(x_wx_openid: str = Header(...)):
     # 返回接收到的 openid
-    return {"openid": openid}
+    return {"openid": x_wx_openid}
 
 @app.api_route("/{service}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 async def proxy(request: Request, service: str, path: str):
